@@ -1,11 +1,7 @@
 from .misc_functions import (
     random_data,
-    csv_to_np,
-    mat_to_np,
-    rescale,
     clr,
-    theoretical_lam,
-    to_zarr,
+    theoretical_lam
 )  # , tree_to_matrix
 from .compact_func import Classo, pathlasso
 from .cross_validation import CV
@@ -26,3 +22,7 @@ from .solver import (
     solution_LAMfixed,
     choose_numerical_method,
 )
+
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions

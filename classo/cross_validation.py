@@ -3,29 +3,23 @@ import numpy.random as rd
 import numpy.linalg as LA
 from .compact_func import Classo, pathlasso
 
-n_lam = 80
 
-
-def compute_1SE(mse_max, MSE, i):
-    j = i
-    while j > 0 and MSE[j] < mse_max:
-        j -= 1
-    return j
-
-
-def train_test_CV(n, k, test_pourcent):
-    idx, training_size = rd.permutation(n), int(n - n * test_pourcent)
-    idx_train, idx_test = idx[:training_size], idx[training_size:]
-    SUBLIST, end = [], 0
+def train_test_CV(n, k):
+    idx = rd.permutation(n)
+    SUBLIST = []
+    sublist_len = n // k
+    rest = n % k
     for i in range(k):
-        begin, end = end, end + training_size // k
-        if i < training_size % k:
-            end += 1
-        SUBLIST.append(idx[begin:end])
-    return (SUBLIST, idx_train, idx_test)
+        if i == k-1:
+            SUBLIST.append(idx[i * sublist_len:(i+1) * sublist_len + rest])
+        else:
+            SUBLIST.append(idx[i * sublist_len:(i+1) * sublist_len])
+
+    return SUBLIST
 
 
 def train_test_i(SUBLIST, i):
+    # create training and test sets 
     training_set, test_set = np.array([], dtype=int), SUBLIST[i]
     for j in range(len(SUBLIST)):
         if j != i:
@@ -49,19 +43,18 @@ def training(
     mat = (A[training_set], C, y[training_set])
     sol = pathlasso(
         mat,
-        lambdas=lambdas,
-        typ=typ,
-        meth=num_meth,
-        rho=rho,
-        e=e,
-        rho_classification=rho_classification,
-        w=w,
-        intercept=intercept,
+        lambdas = lambdas,
+        typ = typ,
+        meth = num_meth,
+        rho = rho,
+        e = e,
+        rho_classification = rho_classification,
+        w = w,
+        intercept = intercept,
     )[0]
     return sol
 
-
-def test_i(
+def cv_test_i(
     matrices,
     typ,
     num_meth,
@@ -95,13 +88,12 @@ def test_i(
             matrices[2][test_set],
             BETA[j],
             typ,
-            rho=rho,
-            rho_classification=rho_classification,
-            intercept=intercept,
+            rho = rho,
+            rho_classification = rho_classification,
+            intercept = intercept,
         )
 
     return residual
-
 
 def average_test(
     matrices,
@@ -119,7 +111,7 @@ def average_test(
     n_lam = len(lambdas)
     RESIDUAL = np.zeros((k, n_lam))
     for i in range(k):
-        RESIDUAL[i, :] = test_i(
+        RESIDUAL[i, :] = cv_test_i(
             matrices,
             typ,
             num_meth,
@@ -132,8 +124,8 @@ def average_test(
             w,
             intercept,
         )
-    MSE = np.mean(RESIDUAL, axis=0)
-    SE = np.std(RESIDUAL, axis=0) / np.sqrt(k)
+    MSE = np.mean(RESIDUAL, axis = 0)
+    SE = np.std(RESIDUAL, axis = 0) / np.sqrt(k)
     return (MSE, SE)
 
 
@@ -142,24 +134,24 @@ def CV(
     k,
     typ="R1",
     num_meth="Path-Alg",
-    test=0.0,
-    seed=1,
-    rho=1.345,
-    rho_classification=-1.0,
-    e=1.0,
-    lambdas=None,
-    Nlam=100,
-    oneSE=True,
-    w=None,
-    intercept=False,
+    seed = 1,
+    rho = 1.345,
+    rho_classification = -1.0,
+    e = 1.0,
+    lambdas = None,
+    Nlam = 100,
+    oneSE = True,
+    w = None,
+    intercept = False,
 ):
 
     if lambdas is None:
         lambdas = np.linspace(1.0, 1e-3, Nlam)
 
     rd.seed(seed)
-    (A, C, y) = matrices
-    SUBLIST, idx_train, idx_test = train_test_CV(len(y), k, test)
+    n = len(matrices[0])
+
+    SUBLIST = train_test_CV(n, k)
     MSE, SE = average_test(
         matrices,
         typ,
@@ -173,21 +165,22 @@ def CV(
         intercept,
     )
     i = np.argmin(MSE)
-    i_1SE = compute_1SE(MSE[i] + SE[i], MSE, i)
+    i_1SE = np.min(np.where(MSE <= MSE[i] + SE[i]))
+
     if oneSE:
         lam = lambdas[i_1SE]
     else:
         lam = lambdas[i]
     out = Classo(
-        (A[idx_train], C, y[idx_train]),
+        matrices,
         lam,
-        typ=typ,
-        meth=num_meth,
-        rho=rho,
-        e=e,
-        rho_classification=rho_classification,
-        w=w,
-        intercept=intercept,
+        typ = typ,
+        meth = num_meth,
+        rho = rho,
+        e = e,
+        rho_classification = rho_classification,
+        w = w,
+        intercept = intercept,
     )
     return (out, MSE, SE, i, i_1SE)
 
@@ -209,17 +202,7 @@ def hinge(A, y, beta):
     return sum(np.maximum(0, 1 - y * A.dot(beta)) ** 2)
 
 
-def huber_hinge(A, y, beta, rho):
-    h = np.maximum(0, 1 - y * A.dot(beta))
-    s = 0
-    for i in range(len(h)):
-        if h[i] < rho:
-            s += 2 * h[i] * rho - rho ** 2
-        else:
-            s += h[i] ** 2
-    return s
-
-def misclassification_rate(X,y,beta):
+def misclassification_rate(X, y, beta):
     yhat = np.sign(X.dot(beta))
     return np.sum(y != yhat) / len(y)
 
@@ -229,7 +212,7 @@ def accuracy_func(
 ):
 
     if intercept:
-        Aprime = np.concatenate([np.ones((len(A), 1)), A], axis=1)
+        Aprime = np.concatenate([np.ones((len(A), 1)), A], axis = 1)
     else:
         Aprime = A[:, :]
 
@@ -241,3 +224,16 @@ def accuracy_func(
         return misclassification_rate(Aprime, y, beta)
     else:
         return LA.norm(Aprime.dot(beta) - y, 2) ** 2 / n
+
+
+"""
+def huber_hinge(A, y, beta, rho):
+    h = np.maximum(0, 1 - y * A.dot(beta))
+    s = 0
+    for i in range(len(h)):
+        if h[i] < rho:
+            s += 2 * h[i] * rho - rho ** 2
+        else:
+            s += h[i] ** 2
+    return s
+"""

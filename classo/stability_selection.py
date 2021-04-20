@@ -22,22 +22,22 @@ There is three different stability selection methods implemented here : 'first' 
 
 def stability(
     matrix,
-    StabSelmethod="first",
-    numerical_method="Path-Alg",
-    Nlam=100,
-    lamin=1e-2,
-    lam=0.1,
-    q=10,
-    B=50,
-    percent_nS=0.5,
-    formulation="LS",
-    seed=1,
-    rho=1.345,
-    rho_classification=-1.0,
-    true_lam=False,
-    e=1.0,
-    w=None,
-    intercept=False,
+    StabSelmethod = "first",
+    numerical_method = "Path-Alg",
+    Nlam = 100,
+    lamin = 1e-2,
+    lam = 0.1,
+    q = 10,
+    B = 50,
+    percent_nS = 0.5,
+    formulation = "R1",
+    seed = 1,
+    rho = 1.345,
+    rho_classification = -1.0,
+    true_lam = False,
+    e = 1.0,
+    w = None,
+    intercept = False,
 ):
 
     rd.seed(seed)
@@ -52,6 +52,7 @@ def stability(
     if StabSelmethod == "first":
 
         distr_path = np.zeros((Nlam, d))
+        distribution = np.zeros(d)
         for i in range(B):
             subset = build_subset(n, nS)
             submatrix = build_submatrix(matrix, subset)
@@ -59,25 +60,26 @@ def stability(
             BETA = np.array(
                 pathlasso(
                     submatrix,
-                    lambdas=lambdas,
-                    n_active=q + 1,
-                    lamin=0,
-                    typ=formulation,
-                    meth=numerical_method,
-                    rho=rho,
-                    rho_classification=rho_classification,
-                    e=e * percent_nS,
-                    w=w,
-                    intercept=intercept,
+                    lambdas = lambdas,
+                    n_active = q + 1,
+                    lamin = 0,
+                    typ = formulation,
+                    meth = numerical_method,
+                    rho = rho,
+                    rho_classification = rho_classification,
+                    e = e * percent_nS,
+                    w = w,
+                    intercept = intercept,
                 )[0]
             )
-
             distr_path = distr_path + (abs(BETA) >= 1e-5)
+            pop = biggest_indexes(BETA[-1], q)
+            distribution[pop] +=1.
             # to do : output, instead of lambdas, the average aciv
             """
                 distr_path(lambda)_i = 1/B number of time where i is  (among the q-first & activated before lambda) 
             """
-        distribution = distr_path[-1]
+        #distribution = distr_path[-1]
         return (distribution * 1.0 / B, distr_path * 1.0 / B, lambdas)
 
     elif StabSelmethod == "lam":
@@ -88,14 +90,14 @@ def stability(
             regress = Classo(
                 submatrix,
                 lam,
-                typ=formulation,
-                meth=numerical_method,
-                rho=rho,
-                rho_classification=rho_classification,
-                e=e * percent_nS,
-                true_lam=true_lam,
-                w=w,
-                intercept=intercept,
+                typ = formulation,
+                meth = numerical_method,
+                rho = rho,
+                rho_classification = rho_classification,
+                e = e * percent_nS,
+                true_lam = true_lam,
+                w = w,
+                intercept = intercept,
             )
             if type(regress) == tuple:
                 beta = regress[0]
@@ -113,17 +115,17 @@ def stability(
             # compute the path until n_active = q, and only take the last Beta
             BETA = pathlasso(
                 submatrix,
-                n_active=0,
-                lambdas=lambdas,
-                typ=formulation,
-                meth=numerical_method,
-                rho=rho,
-                rho_classification=rho_classification,
-                e=e * percent_nS,
-                w=w,
-                intercept=intercept,
+                n_active = 0,
+                lambdas = lambdas,
+                typ = formulation,
+                meth = numerical_method,
+                rho = rho,
+                rho_classification = rho_classification,
+                e = e * percent_nS,
+                w = w,
+                intercept = intercept,
             )[0]
-            betamax = np.amax(abs(np.array(BETA)), axis=0)
+            betamax = np.amax(abs(np.array(BETA)), axis = 0)
             qmax = biggest_indexes(betamax, q)
             for i in qmax:
                 distribution[i] += 1
@@ -139,8 +141,9 @@ Auxilaries functions that are used in the main function which is stability
 
 # returns the list of the q highest componants of an array, using the fact that it is probably sparse.
 def biggest_indexes(array, q):
+    array = abs(array)
     qbiggest = []
-    nonnul = non_nul_indices(array)
+    nonnul = np.nonzero(array)[0]
     reduc_array = array[nonnul]
     for i1 in range(q):
         if not np.any(nonnul):
@@ -153,14 +156,6 @@ def biggest_indexes(array, q):
         qbiggest.append(index)
     return qbiggest
 
-
-# return the list of indices where the componant of the array is null
-def non_nul_indices(array):
-    L = []
-    for i in range(len(array)):
-        if not (array[i] == 0.0):
-            L.append(i)
-    return L
 
 
 # for a certain threshold, it returns the features that should be selected

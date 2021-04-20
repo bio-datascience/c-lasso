@@ -7,6 +7,7 @@ tags:
   - constrained regression
   - Lasso
   - Huber function
+  - Square Hinge SVM
   - convex optimization
   - perspective function
 authors:
@@ -53,7 +54,7 @@ $$
     \min_{\beta \in \mathbb{R}^d, \sigma \in \mathbb{R}_{0}} f\left(X\beta - y,{\sigma} \right) + \lambda \left\lVert \beta\right\rVert_1 \qquad \textrm{subject to} \qquad  C\beta = 0
 $$
 
-for several convex loss functions $f(\cdot,\cdot)$. This includes the constrained Lasso, the constrained scaled Lasso, and sparse Huber M-estimators with linear equality constraints.
+for several convex loss functions $f(\cdot,\cdot)$. This includes the constrained Lasso, the constrained scaled Lasso, sparse Huber M-estimators with linear equality constraints, and constrained (Huberized) Square Hinge Support Vector Machines (SVMs) for classification.
 
 # Statement of need 
 
@@ -70,6 +71,7 @@ Currently, there is no Python package available that can solve these ubiquitous 
 pip install c-lasso
 ```
 
+`c-lasso` is a stand-alone package and not yet compatible with the `scikit-learn` API.
 The central object in the `c-lasso` package is the instantiation of a `c-lasso` problem. 
 
 ```python
@@ -78,7 +80,7 @@ from classo import classo_problem
 
 # Define a c-lasso problem instance with default setting, 
 # given data X, y, and constraints C.
-problem  = classo_problem(X,y,C)
+problem  = classo_problem(X, y, C)
 ```
 
 We next describe what type of problem instances are available and how to solve them.
@@ -106,7 +108,7 @@ problem.formulation.concomitant = False
 problem.formulation.classification = False
 ```
 
-### *R2* Contrained sparse Huber regression: {#R2}                  
+### *R2* Constrained sparse Huber regression: {#R2}                  
 
 $$
     \min_{\beta \in \mathbb{R}^d} h_{\rho} (X\beta - y) + \lambda \left\lVert \beta\right\rVert_1 \qquad \textrm{subject to} \qquad  C\beta = 0
@@ -122,7 +124,7 @@ problem.formulation.concomitant = False
 problem.formulation.classification = False
 ```
 
-### *R3* Contrained scaled Lasso regression: {#R3}
+### *R3* Constrained scaled Lasso regression: {#R3}
 
 $$
     \min_{\beta \in \mathbb{R}^d, \sigma \in \mathbb{R}_{0}} \frac{\left\lVert X\beta - y \right\rVert^2}{\sigma} + \frac{n}{2} \sigma + \lambda \left\lVert \beta\right\rVert_1 \qquad \textrm{subject to} \qquad  C\beta = 0
@@ -137,7 +139,7 @@ problem.formulation.concomitant = True
 problem.formulation.classification = False
 ```
 
-### *R4* Contrained sparse Huber regression with concomitant scale estimation: {#R4}       
+### *R4* Constrained sparse Huber regression with concomitant scale estimation: {#R4}       
 
 $$
     \min_{\beta \in \mathbb{R}^d, \sigma \in  \mathbb{R}_{0}} \left( h_{\rho} \left( \frac{X\beta - y}{\sigma} \right) + n \right) \sigma + \lambda \left\lVert \beta\right\rVert_1 \qquad \textrm{subject to} \qquad  C\beta = 0
@@ -153,7 +155,7 @@ problem.formulation.concomitant = True
 problem.formulation.classification = False
 ```
 
-### *C1* Contrained sparse classification with Square Hinge loss: {#C1}
+### *C1* Constrained sparse classification with Square Hinge loss: {#C1}
 
 $$
     \min_{\beta \in \mathbb{R}^d} \sum_{i=1}^n l(y_i x_i^\top\beta) + \lambda \left\lVert \beta\right\rVert_1 \qquad \textrm{subject to} \qquad  C\beta = 0
@@ -174,7 +176,7 @@ problem.formulation.concomitant = False
 problem.formulation.classification = True
 ```
 
-### *C2* Contrained sparse classification with Huberized Square Hinge loss: {#C2}       
+### *C2* Constrained sparse classification with Huberized Square Hinge loss: {#C2}       
 
 $$
     \min_{\beta \in \mathbb{R}^d}  \sum_{i=1}^n  l_{\rho}(y_i x_i^\top\beta) + \lambda \left\lVert \beta\right\rVert_1 \qquad \textrm{subject to} \qquad  C\beta = 0 \,.
@@ -263,6 +265,16 @@ problem.model_selection.StabSel = True
 ```
 Each model selection procedure has additional meta-parameters that are described in the [Documentation](https://c-lasso.readthedocs.io/en/latest/).
 
+# Numerical benchmarks
+
+To evaluate optimization accuracy and running time of the different algorithms available in `c-lasso`, we provide [micro-benchmark](https://github.com/Leo-Simpson/c-lasso/tree/master/benchmark) experiments which also include [cvxpy](https://www.cvxpy.org), an open source convex optimization software, for baseline comparison. All experiments have been computed using Python 3.9.1 on a `MacBook Air` with a `1.8 GHz Intel Core i5` processor and `8 Gb 1600 MHz DDR3` memory, operating on macOS High Sierra. 
+
+Figure 1 summarizes the results for the *Path-Alg*, *DR*, and *P-PDS* algorithms solving the regression formulation [R1](#R1) for different samples sizes $n$ and problem dimensions $p$ on synthetic data (using `c-lasso`'s data generator). We observe that `c-lasso`'s algorithms are faster and more accurate than the `cvx` baseline. For instance, for $d=500$ features and $n=500$ samples, the *Path-Alg* algorithm is about $70$ times faster than `cvx`.
+
+![Average running times (left panel) of *Path-Alg* (blue), *P-PDS* (yellow), *DR* (green), and cvx (red) at fixed $\lambda = 0.1$ and corresponding average objective function value differences (with respect to the function value obtained by the *Path-Alg* solution as baseline) (right panel). Mean (and standard deviation) running time is calculated over 20 data replications for each sample size/dimension scenario $(n,d)$. On a single data set, the reported running time of an algorithm is the average time of five algorithm runs (to guard against system background process fluctuations).](figures/figure_benchmark.png)
+
+The complete reproducible micro-benchmark is avaialable [here](https://github.com/Leo-Simpson/c-lasso/tree/master/benchmark).
+
 # Computational examples  
 
 ## Toy example using synthetic data
@@ -270,18 +282,28 @@ Each model selection procedure has additional meta-parameters that are described
 We illustrate the workflow of the `c-lasso` package on synthetic data using the built-in routine ```random_data``` which enables the generation of test 
 problem instances with normally distributed data $X$, sparse coefficient vectors $\beta$, and constraints $C \in \mathbb{R}^{k\times d}$.
 
-Here, we use a problem instance with $n=100$, $d=100$, a $\beta$ with five non-zero components, $\sigma=0.5$, and a zero-sum contraint. 
+Here, we use a problem instance with $n=100$, $d=100$, a $\beta$ with five non-zero components, $\sigma=0.5$, and a zero-sum contraint.
+
 
 ```python
+
+
+
+
+
+
 from classo import classo_problem, random_data
 
-n,d,d_nonzero,k,sigma =100,100,5,1,0.5
-(X,C,y),sol = random_data(n,d,d_nonzero,k,sigma,zerosum=True, seed = 123 )
-print("Relevant variables  : {}".format(list(numpy.nonzero(sol)) ) )
+n, d, d_nonzero, k, sigma = 100, 100, 5, 1, 0.5
+(X, C, y), sol = random_data(
+  n, d, d_nonzero, k, sigma,
+  zerosum = True, seed = 123
+)
+print("Relevant variables  : {}".format(numpy.nonzero(sol)[0]))
 
-problem  = classo_problem(X,y,C)
+problem = classo_problem(X, y, C)
 
-problem.formulation.huber  = True
+problem.formulation.huber = True
 problem.formulation.concomitant = False
 problem.formulation.rho = 1.5
 
@@ -326,7 +348,7 @@ are stored in ```problem.solution``` and can be directly acccessed for each mode
 # Access to the estimated coefficient vector at a fixed lambda 
 problem.solution.LAMfixed.beta
 ```
-Note that the run time for this $d=100$-dimensional example for a single path computation is about 0.5 seconds on a standard Laptop.
+Note that the run time for this $d=100$-dimensional example for a single path computation is about 0.5 seconds on a standard laptop.
 
 ## Log-contrast regression on gut microbiome data
 
@@ -345,7 +367,7 @@ The code snippet below shows how `c-lasso` is called in `R` to perform regressio
 In `R`, X and C need to be of ```matrix``` type, and y of ```array``` type.
 
 ```r
-problem <- classo$classo_problem(X=X,C=C,y=y) 
+problem <- classo$classo_problem(X = X, C = C, y = y) 
 problem$model_selection$LAMfixed <- TRUE
 problem$model_selection$StabSel <- FALSE
 problem$model_selection$LAMfixedparameters$rescaled_lam <- TRUE

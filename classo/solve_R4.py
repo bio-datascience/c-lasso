@@ -2,7 +2,7 @@ import numpy as np
 import numpy.linalg as LA
 from .solve_R3 import problem_R3, Classo_R3
 
-"""
+r"""
 Problem    :   min h_rho((Ab - y)/sigma)sigma + simga + lambda ||b||1 with C.b= 0, sigma>0
 
 Dimensions :   A : m*d  ;  y : m  ;  b : d   ; C : k*d
@@ -14,6 +14,7 @@ One can initialise it this way : pb = class_of_problem.problem(data=(A,C,y),type
 We solve the problem without normalizing anything.
 """
 
+tol = 1e-5
 
 def Classo_R4(pb, lam):
     pb_type = pb.type  # can be 'Path-Alg' or 'DR'
@@ -22,7 +23,7 @@ def Classo_R4(pb, lam):
     rho = pb.rho
     regpath = pb.regpath
 
-    if lam == 0.0:
+    if lam < 1e-5:
         pb_type = "Path-Alg"  # in this case, we will simply use R3.
 
     # Only alternative to 2prox : one can use the other formulation of the problem which shows that
@@ -34,14 +35,14 @@ def Classo_R4(pb, lam):
         # trick of mean-shift formulation explained in the pdf "concomitant huber"
         # problem of e ==> same trick to do as explained as in the end of the file compact_func, with r = np.sqrt(2)
 
-        A_aug = np.sqrt(2) * np.concatenate((A, lamb / (2 * rho) * np.eye(m)), axis=1)
-        C_aug = np.concatenate((C, np.zeros((k, m))), axis=1)
+        A_aug = np.sqrt(2) * np.concatenate((A, lamb / (2 * rho) * np.eye(m)), axis = 1)
+        C_aug = np.concatenate((C, np.zeros((k, m))), axis = 1)
         y_aug = np.sqrt(2) * y
 
         if pb.intercept:
             A_aug = A_aug[:, 1:]
             C_aug = C_aug[:, 1:]
-            Abar = np.mean(A_aug, axis=0)
+            Abar = np.mean(A_aug, axis = 0)
             ybar = np.mean(y_aug)
             A_aug = A_aug - Abar
             y_aug = y_aug - ybar
@@ -51,7 +52,7 @@ def Classo_R4(pb, lam):
         s = s / 2
         beta = beta_aug[:-m]
         if pb.intercept:
-            betaO = ybar - np.vdot(Abar, beta)
+            betaO = ybar - np.vdot(Abar, beta_aug)
             beta = np.array([betaO] + list(beta))
         return beta, s
 
@@ -59,28 +60,28 @@ def Classo_R4(pb, lam):
     # Hence, the prox is not so easy to compute because there is a root of polynomial of degree 3 to compute.
     # We do that in the function prox_phi_2 which use the function prox_phi_i (prox of one componant),
     # and it uses calc_Newton which uses newton's method with good initialization.
+    else: # "DR":
 
-    if not regpath:
-        pb.compute_param()
+        if not regpath:
+            pb.compute_param()
 
-    proj_sigm = pb.proj_sigm
-    QA = pb.QA
-    Q1 = pb.Q1
-    Q2 = pb.Q2
-    Proj = pb.Proj
-    Anorm = pb.Anorm
+        proj_sigm = pb.proj_sigm
+        QA = pb.QA
+        Q1 = pb.Q1
+        Q2 = pb.Q2
+        Proj = pb.Proj
+        Anorm = pb.Anorm
 
-    tol = pb.tol * LA.norm(y)  # tolerance rescaled
-    gamma = LA.norm(y) * pb.gam / (Anorm ** 2)
-    # two vectors usefull to compute the prox of f(b)= sum(wi |bi|)
-    w = lamb * gamma * pb.weights
-    zerod = np.zeros(d)
-    mu, c = pb.mu, pb.c
-    root = [0.0] * len(y)
-    xs, nu, o, xbar, x = pb.init
+        tol = pb.tol * LA.norm(y)  # tolerance rescaled
+        gamma = LA.norm(y) * pb.gam / (Anorm ** 2)
+        # two vectors usefull to compute the prox of f(b)= sum(wi |bi|)
+        w = lamb * gamma * pb.weights
+        zerod = np.zeros(d)
+        mu, c = pb.mu, pb.c
+        root = [0.0] * len(y)
+        xs, nu, o, xbar, x = pb.init
 
-    # 2prox
-    if pb_type == "DR":
+        b,s = 0., 0.  # just for flake8 purpose
         for i in range(pb.N):
             nv_b = x + Q1.dot(o) - QA.dot(x) - Q2.dot(x - xbar)
             nv_s = (xs + nu) / 2
@@ -118,8 +119,6 @@ def Classo_R4(pb, lam):
             % pb.N
         )
 
-    print("none of the cases ! ")
-
 
 """
 This function compute the the solution for a given path of lam :
@@ -129,8 +128,8 @@ that rules Beta and the subgradient s, and then to evaluate it in the given fini
 """
 
 
-def pathlasso_R4(pb, path, n_active=False):
-    n = pb.dim[0]
+def pathlasso_R4(pb, path, n_active = False):
+    n, d, k = pb.dim
     BETA, SIGMA, tol = [], [], pb.tol
     pb.type = "DR"
     save_init = pb.init
@@ -139,7 +138,7 @@ def pathlasso_R4(pb, path, n_active=False):
     if type(n_active) == int and n_active > 0:
         n_act = n_active
     else:
-        n_act = n
+        n_act = d + 1
 
     for lam in path:
         X = Classo_R4(pb, lam)
@@ -167,7 +166,7 @@ Class of problem : we define a type, which will contain as keys, all the paramet
 
 
 class problem_R4:
-    def __init__(self, data, algo, rho, intercept=False):
+    def __init__(self, data, algo, rho, intercept = False):
         self.N = 500000
 
         (AA, C, y) = data
@@ -176,8 +175,8 @@ class problem_R4:
         self.intercept = intercept
         if intercept:
             # add a column of 1 in A, and change weight.
-            A = np.concatenate([np.ones((len(A), 1)), A], axis=1)
-            C = np.concatenate([np.ones((len(C), 1)), C], axis=1)
+            A = np.concatenate([np.ones((len(A), 1)), A], axis = 1)
+            C = np.concatenate([np.ones((len(C), 1)), C], axis = 1)
             self.weights = np.concatenate([[0.0], self.weights])
             # not exactly what it should be...
             yy = y - np.mean(y)
@@ -190,7 +189,7 @@ class problem_R4:
         self.matrix = (A, C, y)
 
         (m, d, k) = self.dim
-        self.tol = 1e-3
+        self.tol = tol
 
         self.regpath = False
         self.name = algo + " Concomitant Huber"

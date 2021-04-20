@@ -40,13 +40,13 @@ class parameters_for_update:
         M           : matrix to invert
         y           : output
         r           : residual
-        F           : F is the set where r<1 and if huber, then it is the set where rho<r<1
+        F           : F is the set where r<1 and if C1, and it is the set where rho<r<1 for C2, and r<rho for R2
         rho         : only use when doing huber path algo
 
 
     """
 
-    def __init__(self, matrices, lamin, rho, typ, eps_L2=1e-3, intercept=False):
+    def __init__(self, matrices, lamin, rho, typ, eps_L2 = 1e-3, intercept = False):
         if typ == "C2" and rho > 1:
             raise ValueError(
                 "For huberized hinge, rho has to be smaller than 1, but here it is :",
@@ -82,7 +82,7 @@ class parameters_for_update:
         P = self.A[self.F]
         if intercept:
             P = P - np.mean(P, axis=0)
-        AtA = 2 * P.T.dot(P) + eps_L2 * np.eye(d)
+        AtA = P.T.dot(P) + eps_L2 * np.eye(d)
 
         self.r = r_func(self.beta0, self.y)
         s = -2 * self.A.T.dot(dr * h_prime(rho, typ)(self.r))
@@ -118,8 +118,9 @@ class parameters_for_update:
             self.Xt = LA.inv(N + self.eps_L2 * np.eye(len(N)))
 
 
+
 # iteration of the function up to solve the path at each breaking points.
-def solve_path(matrices, lamin, n_active, rho, typ, intercept=False):
+def solve_path(matrices, lamin, n_active, rho, typ, intercept = False):
     """
     This functions will compute the path for all the breaking points :
     beta is a piecewise linear function of lambda, and only value on the breaking points
@@ -148,15 +149,34 @@ def solve_path(matrices, lamin, n_active, rho, typ, intercept=False):
         else:
             return BETA, LAM
     for i in range(d * N_frac):
-        up(param)
-        BETA.append(param.beta), LAM.append(param.lam)
-        if intercept:
-            BETA0.append(param.beta0)
-        if (n_active > 0 and param.number_act >= n_active) or param.lam == lamin:
+
+        still_F = np.any(param.F)
+        too_active = (n_active > 0 and param.number_act >= n_active)
+        
+        if not still_F or too_active or param.lam == lamin:
             if intercept:
                 return BETA0, BETA, LAM
             else:
                 return BETA, LAM
+                
+        #elif not np.any(param.F):
+        #    print(param.r)
+        #    raise ValueError("The problem looks infeasible because the set of active sample became zero, "
+        #                     "at the iteration {} "
+        #                      "for formulation {} " 
+        #                      "with intercept ? {} "
+        #                      "with rho equal to {} ".format(i, typ, intercept, rho ))
+        
+        up(param)
+        BETA.append(param.beta), LAM.append(param.lam)
+
+        #print("inside : ", param.r[ param.F], np.nonzero(param.F)[0] )
+        #print(" outside : ", param.r[~param.F], np.nonzero(~param.F)[0])
+
+
+        if intercept:
+            BETA0.append(param.beta0)
+        
 
     raise ValueError(
         "The path algorithm did not finsh after %i iterations " % N,
@@ -165,7 +185,7 @@ def solve_path(matrices, lamin, n_active, rho, typ, intercept=False):
     )
 
 
-def solve_path_Conc(matrices, stop, n_active=False, lassopath=True, true_lam=False):
+def solve_path_Conc(matrices, stop, n_active = False, lassopath = True, true_lam = False):
     """
     This functions will compute the path for all the breaking points :
     beta is a piecewise linear function of lambda, and only value on the breaking points
@@ -235,7 +255,7 @@ def solve_path_Conc(matrices, stop, n_active=False, lassopath=True, true_lam=Fal
     )
 
 
-def pathalgo_general(matrix, path, typ, n_active=False, rho=0, intercept=False):
+def pathalgo_general(matrix, path, typ, n_active = False, rho = 0, intercept = False):
     """
     This function is only to interpolate the solution path between the breaking points
     """
@@ -249,6 +269,7 @@ def pathalgo_general(matrix, path, typ, n_active=False, rho=0, intercept=False):
         B, sp_path = solve_path(
             matrix, path[-1], n_active, rho, typ, intercept=intercept
         )
+    
 
     sp_path.append(path[-1]), B.append(B[-1])
     for lam in path:
@@ -262,17 +283,8 @@ def pathalgo_general(matrix, path, typ, n_active=False, rho=0, intercept=False):
     if intercept:
         BETA = np.array([[BETA0[i]] + list(BETA[i]) for i in range(len(BETA0))])
 
+
     return BETA
-
-
-def pathalgo_huber_cl(matrix, path, rho, n_active=False, intercept=False):
-    return pathalgo_general(
-        matrix, path, "C2", n_active=n_active, rho=rho, intercept=intercept
-    )
-
-
-def pathalgo_cl(matrix, path, n_active=False, intercept=False):
-    return pathalgo_general(matrix, path, "C1", n_active, intercept=intercept)
 
 
 def up(param):
@@ -359,7 +371,7 @@ def up_LS(param):
         Xt = LA.inv(N + eps_L2 * np.eye(len(N)))
 
     beta = beta - lambdamax * beta_dot * dlamb
-    if not (lam == dlamb):
+    if dlamb < lam :
         s = lam_s_dot + lam / (lam - dlamb) * (s - lam_s_dot)
     lam -= dlamb
 
@@ -397,7 +409,7 @@ def up_huber(param):
     lam = param.lam
     M = param.M
     r = param.r
-
+    
     d = len(activity)
     L = [lam] * d
     Mat = M[:d, :d]
@@ -439,7 +451,8 @@ def up_huber(param):
         if dl < dlamb:
             huber_up, j_switch, dlamb = True, j, dl
     beta = beta - lambdamax * beta_dot * dlamb
-    s = lam_s_dot + lam / (lam - dlamb) * (s - lam_s_dot)
+    if dlamb < lam :
+        s = lam_s_dot + lam / (lam - dlamb) * (s - lam_s_dot)
     r = r + ADl * dlamb
     lam = lam - dlamb
     if param.intercept:
@@ -448,6 +461,11 @@ def up_huber(param):
 
     if huber_up:
         F[j_switch] = not F[j_switch]
+        # sufficient :
+        #F = F | (abs(r) < rho - 1e-6)
+        # necessary :
+        #F = F & (abs(r) <= rho + 1e-6) 
+
         if param.intercept:
             P = A[F] - np.mean(A[F], axis=0)
             M[:d, :][:, :d] = 2 * P.T.dot(P) + eps_L2 * np.eye(d)
@@ -495,7 +513,6 @@ def up_cl(param):
     """
     Function to call to go from a breaking point to the next one
     """
-
     lambdamax = param.lambdamax
     lamin = param.lamin
     A = param.A
@@ -550,7 +567,8 @@ def up_cl(param):
             max_up, j_switch, dlamb = True, j, dl
 
     beta = beta - lambdamax * beta_dot * dlamb
-    s = lam_s_dot + lam / (lam - dlamb) * (s - lam_s_dot)
+    if dlamb < lam :
+        s = lam_s_dot + lam / (lam - dlamb) * (s - lam_s_dot)
     r = r + yADl * dlamb
     lam = lam - dlamb
     if param.intercept:
@@ -560,6 +578,10 @@ def up_cl(param):
 
     if max_up:
         F[j_switch] = not F[j_switch]
+        # sufficient :
+        #F = F | (r < 1. - 1e-10) 
+        # necessary :
+        #F = F & (r <= 1. + 1e-10)
         if param.intercept:
             P = A[F] - np.mean(A[F], axis=0)
             M[:d, :][:, :d] = 2 * P.T.dot(P) + eps_L2 * np.eye(d)
@@ -685,7 +707,8 @@ def up_huber_cl(param):
             max_up, j_switch, dlamb = True, j, dl
 
     beta = beta - lambdamax * beta_dot * dlamb
-    s = lam_s_dot + lam / (lam - dlamb) * (s - lam_s_dot)
+    if dlamb < lam :
+        s = lam_s_dot + lam / (lam - dlamb) * (s - lam_s_dot)
     r = r + yADl * dlamb
     lam = lam - dlamb
     if param.intercept:
@@ -694,11 +717,17 @@ def up_huber_cl(param):
 
     if max_up:
         F[j_switch] = not F[j_switch]
-        if param.intercept:
-            P = A[F] - np.mean(A[F], axis=0)
-            M[:d, :][:, :d] = 2 * P.T.dot(P) + eps_L2 * np.eye(d)
-        else:
-            M[:d, :][:, :d] = 2 * A[F].T.dot(A[F]) + eps_L2 * np.eye(d)
+        # sufficient :
+        #F = F | ( (r < 1. - 1e-10) & (r > rho + 1e-10) )
+        # necessary :
+        #F = F & ( (r <= 1. + 1e-10) & (r >= rho - 1e-10) )
+
+        if np.any(F):
+            if param.intercept:
+                P = A[F] - np.mean(A[F], axis=0)
+                M[:d, :][:, :d] = 2 * P.T.dot(P) + eps_L2 * np.eye(d)
+            else:
+                M[:d, :][:, :d] = 2 * A[F].T.dot(A[F]) + eps_L2 * np.eye(d)
 
     else:
         # Update matrix inverse, list of rows in C and activity
@@ -770,6 +799,7 @@ def derivatives(activity, s, Mat, C, Inv, idr, number_act):
 # Upddate a list of constraints which are independant if we restrict the matrix C to the acrive set (C_A has to have independant rows)
 # When we ad an active parameter
 def next_idr1(liste, mat):
+    # function to know which indice one should add
     if sum(liste) == len(mat):
         return False
     if sum(liste) == 0:
@@ -801,24 +831,7 @@ def next_idr2(liste, mat):
     return False
 
 
-# Update the invers of a matrix whom we add a line, which is useul to compute the derivatives
-def next_inv(Xt, B, al, ligne):
-    n = len(Xt)
-    Yt = np.zeros((n + 1, n + 1))
-    alpha = 1 / al
-    B = np.array([B])
-    b1 = Xt[:ligne, :][:, :ligne] + alpha * B[:, :ligne].T.dot(B[:, :ligne])
-    b2 = Xt[ligne:, :][:, :ligne] + alpha * B[:, ligne:].T.dot(B[:, :ligne])
-    b4 = Xt[ligne:, :][:, ligne:] + alpha * B[:, ligne:].T.dot(B[:, ligne:])
-    col1 = np.concatenate((b1, -alpha * B[:, :ligne], b2), axis=0)
-    col2 = np.concatenate((b2.T, -alpha * B[:, ligne:], b4), axis=0)
-    col = np.concatenate(
-        (-alpha * B[0, :ligne], [alpha], -alpha * B[0, ligne:]), axis=0
-    )
-    return np.concatenate((col1, np.array([col]).T, col2), axis=1)
-
-
-def h_lambdamax(matrices, rho, typ="R1", intercept=False):
+def h_lambdamax(matrices, rho, typ = "R1", intercept=False):
     param = parameters_for_update(matrices, 0.0, rho, typ, intercept=intercept)
     return param.lambdamax
 
@@ -858,12 +871,12 @@ def find_F(y, rho, typ):
     """
     if rho > 0 and typ == "R2":
         # huber regress
-        return (y > -rho) & (y < rho)
+        return (y >= -rho) & (y <= rho)
     elif typ == "C2":
         # huber classify
-        return (y > rho) & (y < 1)
+        return (y >= rho) & (y <= 1)
     elif typ == "C1":
-        return y < 1
+        return y <= 1
     else:
         # no huber
         return np.ones(len(y), dtype=bool)
@@ -875,12 +888,12 @@ def find_beta0(r, dbeta0, y, rho, typ):
     return beta0
 
 
-def binary_search(f, a, b, tol=1e-8):
+def binary_search(f, a, b, tol = 1e-8):
     c = (a + b) / 2
-    if f(a) * f(b) > 0:
-        print("gradh(min(y)) = ", f(a))
-        print("gradh(max(y)) = ", f(b))
-        raise ValueError("Error in binary search for initial intercept")
+    # if f(a) * f(b) > 0:
+    #    print("gradh(min(y)) = ", f(a))
+    #    print("gradh(max(y)) = ", f(b))
+    #    raise ValueError("Error in binary search for initial intercept")
     while abs(f(c)) > tol:
         if f(c) * f(a) < 0:
             b = c
@@ -898,4 +911,37 @@ then we use it to find sigma and so the solution, using the equation for sigma:
 sigma = || A*B(lambda*sigma) - y ||_2       (where B(lambda) is found thanks to solve_path)
 
             teta = (sp_path[i]-lam)/(sp_path[i]-sp_path[i+1])
+"""
+
+
+"""
+# Update the invers of a matrix whom we add a line, which is useul to compute the derivatives
+def next_inv(Xt, B, al, ligne):
+    n = len(Xt)
+    Yt = np.zeros((n + 1, n + 1))
+    alpha = 1 / al
+    B = np.array([B])
+    b1 = Xt[:ligne, :][:, :ligne] + alpha * B[:, :ligne].T.dot(B[:, :ligne])
+    b2 = Xt[ligne:, :][:, :ligne] + alpha * B[:, ligne:].T.dot(B[:, :ligne])
+    b4 = Xt[ligne:, :][:, ligne:] + alpha * B[:, ligne:].T.dot(B[:, ligne:])
+    col1 = np.concatenate((b1, -alpha * B[:, :ligne], b2), axis=0)
+    col2 = np.concatenate((b2.T, -alpha * B[:, ligne:], b4), axis=0)
+    col = np.concatenate(
+        (-alpha * B[0, :ligne], [alpha], -alpha * B[0, ligne:]), axis=0
+    )
+    return np.concatenate((col1, np.array([col]).T, col2), axis=1)
+
+
+
+def pathalgo_huber_cl(matrix, path, rho, n_active = False, intercept = False):
+    return pathalgo_general(
+        matrix, path, "C2", n_active=n_active, rho=rho, intercept=intercept
+    )
+
+
+def pathalgo_cl(matrix, path, n_active = False, intercept = False):
+    return pathalgo_general(matrix, path, "C1", n_active, intercept=intercept)
+
+
+
 """

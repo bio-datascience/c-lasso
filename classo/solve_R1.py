@@ -3,7 +3,7 @@ import numpy as np
 import numpy.linalg as LA
 from .misc_functions import unpenalized
 
-"""
+r"""
 Problem    :   min ||Ab - y||^2 + lambda ||b||1 with C.b= 0
 
 Dimensions :   A : m*d  ;  y : m  ;  b : d   ; C : k*d
@@ -13,11 +13,12 @@ The parameters are lam (lambda/lambdamax, in [0,1]) and pb, which has to be a 'p
  which is defined bellow in order to contain all the important parameters of the problem.
 """
 
+tol = 1e-5
 
 def Classo_R1(pb, lam):
     pb_type = pb.type  # can be 'Path-Alg', 'P-PDS' , 'PF-PDS' or 'DR'
 
-    if lam == 0.0:
+    if lam < 1e-5:
         return unpenalized(pb.matrix)
 
     # ODE
@@ -34,31 +35,16 @@ def Classo_R1(pb, lam):
     Anorm = pb.Anorm
     tol = pb.tol * LA.norm(y) / Anorm  # tolerance rescaled
 
-    # cvx
-    # call to the cvx function of minimization
-    """
-    if (pb_type == 'cvx'):
-        import cvxpy as cp
-        lamb = lam*2*LA.norm(A.T.dot(y),np.infty)
-        x = cp.Variable(d)
-        objective, constraints = cp.Minimize(cp.sum_squares(A*x-y)+ lamb*cp.norm(x, 1)), [C*x == 0]
-        prob = cp.Problem(objective, constraints)
-        result = prob.solve(warm_start=regpath,eps_abs= tol)
-        if (regpath): return(x.value,True)
-        return(x.value)
-    """
 
-    Proj, AtA, Aty = (
-        proj_c(C, d),
-        pb.AtA,
-        pb.Aty,
-    )  # Save some matrix products already computed in problem.compute_param()
+    Proj = proj_c(C, d)
+    AtA = pb.AtA
+    Aty = pb.Aty
+    # Save some matrix products already computed in problem.compute_param()
     gamma, tau = pb.gam / (2 * pb.AtAnorm), pb.tauN
     w, zerod = lamb * gamma * pb.weights, np.zeros(
         d
-    )  # two vectors usefull to compute the prox of f(b)= sum(wi |bi|)
+    )  # two vectors usefull to compute the prox of f(b) = sum(wi |bi|)
 
-    # NO PROJ
 
     if pb_type == "PF-PDS":  # y1 --> S ; p1 --> p . ; p2 --> y2
         (x, v) = pb.init
@@ -73,7 +59,7 @@ def Classo_R1(pb, lam):
             eps = p - gamma * (AtA.dot(p) - Aty) * 2 - C.T.dot(y2) - S
             x = x + eps
 
-            if i > 0 and LA.norm(eps) < tol:
+            if i % 10 == 2 and LA.norm(eps) < tol:
                 if regpath:
                     return (x, (x, v))
                 else:
@@ -86,7 +72,6 @@ def Classo_R1(pb, lam):
             "The algorithm of PF-PDS did not converge after %i iterations " % pb.N
         )
 
-    # FORARD BACKWARD
 
     if pb_type == "P-PDS":
         xbar, x, v = pb.init
@@ -100,7 +85,7 @@ def Classo_R1(pb, lam):
             eps = nw_x - x
             xbar = p + eps
 
-            if i % 10 == 2 and LA.norm(eps) < tol:  # 0.6
+            if i % 10 == 2 and LA.norm(eps) < tol:
                 if regpath:
                     return (x, (xbar, x, v))
                 else:
@@ -113,13 +98,12 @@ def Classo_R1(pb, lam):
             "The algorithm of P-PDS did not converge after %i iterations " % pb.N
         )
 
-    # 2 PROX
 
-    if pb_type == "DR":
+    else: # "DR":
         gamma = gamma / (2 * lam)
         w = w / (2 * lam)
         mu, ls, c, root = pb.mu, [], pb.c, 0.0
-        Q1, Q2 = QQ(2 * gamma / (mu - 1), A, AtA=pb.AtA, AAt=pb.AAt)
+        Q1, Q2 = QQ(2 * gamma / (mu - 1), A, AtA = pb.AtA, AAt = pb.AAt)
         QA, qy = Q1.dot(A), Q1.dot(y)
 
         qy_mult = qy * (mu - 1)
@@ -154,25 +138,23 @@ and then to evaluate it in the given finite path.
 """
 
 
-def pathlasso_R1(pb, path, n_active=False, return_sp_path=False):
-    n = pb.dim[0]
+def pathlasso_R1(pb, path, n_active = False):
+    n, d, k = pb.dim
     BETA, tol = [], pb.tol
     if pb.type == "Path-Alg":
         beta, sp_path = solve_path(pb.matrix, path[-1], n_active, 0, "R1")
-        if return_sp_path:
-            return (
-                beta,
-                sp_path,
-            )  # in the method ODE, we only compute the solution for breaking points. We can stop here if return_sp_path=True
-        else:  # else, we do a little manipulation to interpolated the value of beta between those points, as we know beta is affine between those breaking points.
-            sp_path.append(path[-1]), beta.append(beta[-1])
-            i = 0
-            for lam in path:
-                while lam < sp_path[i + 1]:
-                    i += 1
-                teta = (sp_path[i] - lam) / (sp_path[i] - sp_path[i + 1])
-                BETA.append(beta[i] * (1 - teta) + beta[i + 1] * teta)
-            return BETA
+        # in the method ODE, we only compute the solution for breaking points. We can stop here if return_sp_path = True
+        # else, we do a little manipulation to interpolated the value of beta between those points, as we know beta is affine between those breaking points.
+        # if return_sp_path:
+        #     return beta, sp_path
+        sp_path.append(path[-1]), beta.append(beta[-1])
+        i = 0
+        for lam in path:
+            while lam < sp_path[i + 1]:
+                i += 1
+            teta = (sp_path[i] - lam) / (sp_path[i] - sp_path[i + 1])
+            BETA.append(beta[i] * (1 - teta) + beta[i + 1] * teta)
+        return BETA
 
     # Now we are in the case where we have to do warm starts.
     save_init = pb.init
@@ -181,21 +163,19 @@ def pathlasso_R1(pb, path, n_active=False, return_sp_path=False):
     if type(n_active) == int and n_active > 0:
         n_act = n_active
     else:
-        n_act = n
+        n_act = d + 1
     for lam in path:
         X = Classo_R1(pb, lam)
-        BETA.append(X[0])
-        pb.init = X[1]
+        beta, init = X[0], X[1]
+        BETA.append(beta)
+        pb.init = init
+        p = sum([(abs(beta[i]) > 1e-5) for i in range(len(beta))])
 
-        if (
-            sum([(abs(X[0][i]) > 1e-5) for i in range(len(X[0]))]) >= n_act
-            or type(X[1]) == str
-        ):
+        if p >= n_act or type(init) == str:
             pb.init = save_init
             BETA.extend([BETA[-1]] * (len(path) - len(BETA)))
             pb.regpath = False
             return BETA
-
     pb.init = save_init
     pb.regpath = False
     return BETA
@@ -224,7 +204,7 @@ class problem_R1:
             self.init = np.zeros(d), np.zeros(k)
         else:
             self.init = np.zeros(d), np.zeros(d), np.zeros(d)
-        self.tol = 1e-4
+        self.tol = tol
 
         self.weights = np.ones(d)
         self.regpath = False
@@ -252,7 +232,7 @@ class problem_R1:
         self.c = d ** 2 / np.trace(
             self.AtA
         )  # parameter for Concomitant problem : the matrix is scaled as c*A^2
-        self.Cnorm = LA.norm(C, 2) ** 2
+        self.Cnorm = LA.norm(C, 2) ** 2 + 1e-5
         self.tauN = self.tau / self.Cnorm
         self.AtAnorm = LA.norm(self.AtA, 2)
 
@@ -275,12 +255,11 @@ def prox(b, w, zeros):
 
 # Compute I - C^t (C.C^t)^-1 . C : the projection on Ker(C)
 def proj_c(M, d):
-    if LA.matrix_rank(M) == 0:
-        return np.eye(d)
-    return np.eye(d) - LA.multi_dot([M.T, np.linalg.inv(M.dot(M.T)), M])
+    k = len(M)
+    return np.eye(d) - LA.multi_dot([M.T, np.linalg.inv(M.dot(M.T)+ 1e-4 * np.eye(k)), M])
 
 
-def QQ(coef, A, AtA=None, AAt=None):
+def QQ(coef, A, AtA = None, AAt = None):
     if AtA is None:
         AtA = (A.T).dot(A)
     if AAt is None:

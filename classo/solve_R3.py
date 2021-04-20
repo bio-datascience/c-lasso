@@ -3,7 +3,7 @@ import numpy as np
 import numpy.linalg as LA
 from .misc_functions import unpenalized
 
-"""
+r"""
 Problem    :   min ||Ab - y||^2/sigma + n/2 sigma + lambda ||b||1 with C.b= 0 and sigma > 0
 
 Dimensions :   A : m*d  ;  y : m  ;  b : d   ; C : k*d
@@ -11,17 +11,18 @@ Dimensions :   A : m*d  ;  y : m  ;  b : d   ; C : k*d
 The first function compute a solution of a Lasso problem for a given lambda.
 The parameters are lam (lambda/lambdamax, \in [0,1]) and pb, which has to be a 'problem_LS type',
 which is defined bellow in order to contain all the important parameters of the problem.
-One can initialise it this way : pb = class_of_problem.problem(data=(A,C,y),type_of_algo).
+One can initialise it this way : pb = class_of_problem.problem(data = (A,C,y),type_of_algo).
 We solve the problem without normalizing anything.
 """
 
+tol = 1e-5
 
 def Classo_R3(pb, lam):
     pb_type = pb.type  # can be 'Path-Alg' or 'DR'
     (m, d, k), (A, C, y) = pb.dim, pb.matrix
     sigmax = pb.sigmax
 
-    if lam == 0.0:
+    if lam < 1e-5:
         beta = unpenalized(pb.matrix)
         sigma = LA.norm(A.dot(beta) - y) / np.sqrt(m / 2)
         return beta, sigma
@@ -30,11 +31,11 @@ def Classo_R3(pb, lam):
     # here we compute the path algo until our lambda, and just take the last beta
 
     # here we use our path algorithm for concomitant problem, and then only takes the last beta.
-    # Actually, the function solve_path_Conc has the argument concomitant= 'fix_lam' so it means it will directly stop when it has to.
+    # Actually, the function solve_path_Conc has the argument concomitant = 'fix_lam' so it means it will directly stop when it has to.
     # Then we only have to finc the solution between the last beta computed and the one before.
     if pb_type == "Path-Alg":
         (beta1, beta2), (s1, s2), (r1, r2) = solve_path_Conc(
-            (A, C, y), lam, lassopath=False
+            (A, C, y), lam, lassopath = False
         )
         dr, ds = r1 - r2, s1 - s2
         teta = root_2(
@@ -46,31 +47,34 @@ def Classo_R3(pb, lam):
         beta = beta1 * teta + beta2 * (1 - teta)
         return (beta, sigma)
 
-    regpath = pb.regpath
-    if not regpath:
-        pb.compute_param()
+    else: # DR
+        regpath = pb.regpath
+        if not regpath:
+            pb.compute_param()
 
-    lamb = lam * pb.lambdamax
-    Anorm = pb.Anorm
-    tol = pb.tol * LA.norm(y) / Anorm  # tolerance rescaled
-    Proj = proj_c(C, d)  # Proj = I - C^t . (C . C^t )^-1 . C
-    QA = pb.QA
-    Q1 = pb.Q1
-    Q2 = pb.Q2
-    # Save some matrix products already computed in problem.compute_param()
-    gamma = pb.gam / (pb.Anorm2 * lam)  # Normalize gamma
-    w = lamb * gamma * pb.weights
-    zerod = np.zeros(d)
-    # two vectors usefull to compute the prox of f(b)= sum(wi |bi|)
-    mu, c, root = pb.mu, pb.c, 0.0
-    xs, nu, o, xbar, x = pb.init
+        lamb = lam * pb.lambdamax 
+        Anorm = pb.Anorm
+        tol = pb.tol * LA.norm(y) / Anorm  # tolerance rescaled
+        Proj = proj_c(C, d)  # Proj = I - C^t . (C . C^t )^-1 . C
+        QA = pb.QA
+        Q1 = pb.Q1
+        Q2 = pb.Q2
+        # Save some matrix products already computed in problem.compute_param()
+        gamma = pb.gam / (pb.Anorm2 * lam)  # Normalize gamma
+        w = lamb * gamma * pb.weights
 
-    # 2prox
-    if pb_type == "DR":
+        zerod = np.zeros(d)
+        # two vectors usefull to compute the prox of f(b)= sum(wi |bi|)
+        mu, c, root = pb.mu, pb.c, 0.0
+        xs, nu, o, xbar, x = pb.init
+
+        
+        b, s = 0., 0. # just for flake8 purpose.
         for i in range(pb.N):
             nv_b = x + Q1.dot(o) - QA.dot(x) - Q2.dot(x - xbar)
             nv_s = (xs + nu) / 2
-            if i > 0 and LA.norm(b - nv_b) + LA.norm(s - nv_s) / Anorm < 2 * tol:
+            if i % 10 == 2 and LA.norm(b - nv_b) + LA.norm(s - nv_s) / Anorm < 2 * tol:
+                s = s / np.sqrt(m)
                 if regpath:
                     return (b, (xs, nu, o, xbar, x), s)
                 else:
@@ -78,7 +82,7 @@ def Classo_R3(pb, lam):
 
             s, b = nv_s, nv_b
             Ab = A.dot(b)
-            p1, p2, root = prox_phi_1(xs, 2 * Ab - o - y, gamma / c, root)
+            p1, p2, root = prox_phi_1(xs, 2 * Ab - o - y, np.sqrt(m)*gamma / c, root)
             sup1 = max(0, nu) - s
             sup2 = p1 - s
             sup3 = p2 + y - Ab
@@ -98,7 +102,6 @@ def Classo_R3(pb, lam):
             "The algorithm of Doulgas Rachford did not converge after %i iterations "
             % pb.N
         )
-    print("none of the cases ! ")
 
 
 """
@@ -109,7 +112,7 @@ and then to evaluate it in the given finite path.
 """
 
 
-def pathlasso_R3(pb, path, n_active=False):
+def pathlasso_R3(pb, path, n_active = False):
     n, d, k = pb.dim
     BETA, SIGMA, tol = [], [], pb.tol
 
@@ -149,7 +152,7 @@ def pathlasso_R3(pb, path, n_active=False):
     if type(n_active) == int and n_active > 0:
         n_act = n_active
     else:
-        n_act = n
+        n_act = d + 1
 
     for lam in path:
         X = Classo_R3(pb, lam)
@@ -187,7 +190,7 @@ class problem_R3:
 
         (m, d, k) = self.dim
         self.weights = np.ones(d)
-        self.tol = 1e-6
+        self.tol = tol
 
         self.regpath = False
         self.name = algo + " Concomitant"
@@ -196,11 +199,11 @@ class problem_R3:
         self.proj_sigm = lambda x: max(x, 0)
         self.mu = 1.95
 
-        self.gam = np.sqrt(d)
+        self.gam = 1. #np.sqrt(d/m)
         self.Aty = (A.T).dot(y)
         self.sigmax = LA.norm(y) / np.sqrt(m / 2)
         self.lambdamax = 2 * LA.norm(self.Aty, np.infty) / self.sigmax
-        self.init = 1.0, 1.0, np.zeros(m), np.zeros(d), np.zeros(d)
+        self.init = 0.0, 0.0, np.zeros(m), np.zeros(d), np.zeros(d)
 
     # Here we compute the costful matrices products and inverts in order to compute it only once, which is especially helpful for warmstarts.
     def compute_param(self):
