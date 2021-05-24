@@ -20,16 +20,13 @@ from time import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-from .misc_functions import (
-    theoretical_lam,
-    min_LS,
-    affichage,
-    check_size
-)
+from .misc_functions import theoretical_lam, min_LS, affichage, check_size
+
 # from .misc_functions import tree_to_matrix
 from .compact_func import Classo, pathlasso
 from .cross_validation import CV
 from .stability_selection import stability, selected_param
+from .alo import alo_classo_risk
 import matplotlib.patches as mpatches
 
 
@@ -58,9 +55,9 @@ class classo_problem:
     """
 
     def __init__(
-        self, X, y, C = None, Tree = None, label = None
+        self, X, y, C=None, Tree=None, label=None
     ):  # zero sum constraint by default, but it can be any matrix
-        self.data = Data(X, y, C, Tree = Tree, label = label)
+        self.data = Data(X, y, C, Tree=Tree, label=label)
         self.formulation = Formulation()
         self.model_selection = Model_selection()
         self.solution = Solution()
@@ -89,7 +86,6 @@ class classo_problem:
                     self.formulation.e = n
                 else:
                     self.formulation.e = n / 2
-
 
         if self.formulation.w is not None:
             if min(self.formulation.w) < 1e-8:
@@ -122,12 +118,14 @@ class classo_problem:
             yy = data.y - np.mean(data.y)
         else:
             yy = data.y
-        
+
         if self.formulation.scale_rho:
-            self.formulation.rho_scaled = self.formulation.rho * np.sqrt(np.mean(yy**2))
-        else: 
+            self.formulation.rho_scaled = self.formulation.rho * np.sqrt(
+                np.mean(yy ** 2)
+            )
+        else:
             self.formulation.rho_scaled = self.formulation.rho
-            
+
         label = data.label
 
         # Compute the path thanks to the class solution_path which contains directely the computation in the initialisation
@@ -135,6 +133,16 @@ class classo_problem:
             self.solution.PATH = solution_PATH(
                 matrices,
                 self.model_selection.PATHparameters,
+                self.formulation,
+                self.numerical_method,
+                label,
+            )
+
+        # Compute the ALO thanks to the class solution_ALO which contains directely the computation in the initialisation
+        if self.model_selection.ALO:
+            self.solution.ALO = solution_ALO(
+                matrices,
+                self.model_selection.ALOparameters,
                 self.formulation,
                 self.numerical_method,
                 label,
@@ -187,6 +195,11 @@ class classo_problem:
                 + self.model_selection.PATHparameters.__repr__()
             )
 
+        if self.model_selection.ALO:
+            print_parameters += (
+                "\n \nALO PARAMETERS: " + self.model_selection.ALOparameters.__repr__()
+            )
+
         if self.model_selection.CV:
             print_parameters += (
                 "\n \nCROSS VALIDATION PARAMETERS: "
@@ -231,7 +244,7 @@ class Data:
 
     """
 
-    def __init__(self, X, y, C, Tree = None, label = None):
+    def __init__(self, X, y, C, Tree=None, label=None):
         X1, y1, C1 = check_size(X, y, C)
 
         if Tree is None:
@@ -241,8 +254,7 @@ class Data:
                 self.label = np.array(label)
             self.X, self.y, self.C, self.tree = X1, y1, C1, None
 
-
-        #else:
+        # else:
         #    A, label2, subtree = tree_to_matrix(Tree, label, with_repr = True)
         #    self.tree = subtree
         #    self.X, self.y, self.C, self.label = (
@@ -294,12 +306,12 @@ class Formulation:
             (i.e. at least one sample is on the quadratic mode of the huber loss function)
             as long as rho is higher than one.
             Default value : True
-            
+
         rho_scaled (float): Actual rho after solving
             Default value : Not defined
 
 
-        rho_classification (float) : value of rho for huberized hinge loss function for classification ie C2 
+        rho_classification (float) : value of rho for huberized hinge loss function for classification ie C2
             (it has to be strictly smaller then 1).
             Default value : -1.
 
@@ -358,6 +370,11 @@ class Model_selection:
 
         PATHparameters (PATHparameters): object containing parameters to compute the lasso-path.
 
+        ALO (bool): True if path should be computed.
+            Default value : False
+
+        ALOparameters (ALOparameters): object containing parameters to compute the ALO for c-lasso.
+
         CV (bool):  True if Cross Validation should be computed.
             Default value : False
 
@@ -376,32 +393,38 @@ class Model_selection:
 
     """
 
-    def __init__(self, method = "not specified"):
+    def __init__(self, method="not specified"):
 
         # Model selection variables
 
         self.PATH = False
-        self.PATHparameters = PATHparameters(method = method)
+        self.PATHparameters = PATHparameters(method=method)
+
+        self.ALO = False
+        self.ALOparameters = ALOparameters(method=method)
 
         self.CV = False
-        self.CVparameters = CVparameters(method = method)
+        self.CVparameters = CVparameters(method=method)
 
         self.StabSel = True  # Only model selection that is used by default
-        self.StabSelparameters = StabSelparameters(method = method)
+        self.StabSelparameters = StabSelparameters(method=method)
 
         self.LAMfixed = False
-        self.LAMfixedparameters = LAMfixedparameters(method = method)
+        self.LAMfixedparameters = LAMfixedparameters(method=method)
 
     def __repr__(self):
         string = ""
-        if self.LAMfixed:
-            string += "\n     Lambda fixed"
+
         if self.PATH:
             string += "\n     Path"
+        if self.ALO:
+            string += "\n     ALO"
         if self.CV:
             string += "\n     Cross Validation"
         if self.StabSel:
             string += "\n     Stability selection"
+        if self.LAMfixed:
+            string += "\n     Lambda fixed"
 
         return string
 
@@ -439,7 +462,72 @@ class PATHparameters:
 
     """
 
-    def __init__(self, method = "not specified"):
+    def __init__(self, method="not specified"):
+        self.formulation = "not specified"
+        self.numerical_method = method
+        self.n_active = 0
+        self.Nlam = 80
+        self.lamin = 1e-3
+        self.logscale = True
+        self.lambdas = None
+        self.plot_sigma = True
+        self.rescaled_lam = True
+
+    def __repr__(self):
+        if self.lambdas is not None:
+            self.Nlam = len(self.lambdas)
+            self.lamin = min(self.lambdas)
+            typ = " "
+        else:
+            if self.logscale:
+                typ = "with log-scale"
+            else:
+                typ = "with linear-scale"
+
+        string = "\n     numerical_method : " + str(self.numerical_method)
+        string += "\n     lamin = " + str(self.lamin)
+        string += "\n     Nlam = " + str(self.Nlam)
+        string += "\n     " + typ
+        if self.n_active > 0:
+            string += "\n     maximum active variables = " + str(self.n_active)
+
+        return string
+
+
+class ALOparameters:
+    """Class that contains the parameters to compute the lasso-path, then the Approximation of Leave one-out error.
+    It also has a representation method so one can print it.
+
+    Attributes:
+        numerical_method (str) : name of the numerical method that is used, it can be :
+            'Path-Alg' (path algorithm) , 'P-PDS' (Projected primal-dual splitting method),
+            'PF-PDS' (Projection-free primal-dual splitting method) or 'DR' (Douglas-Rachford-type splitting method).
+            Default value : 'not specified', which means that the function :func:`choose_numerical_method` will choose it accordingly to the formulation
+
+        n_active (int): if it is higher than 0, then the algo stops computing the path when n_active variables are active.
+        Then the solution does not change from this point.
+            Default value : 0
+
+        lambdas (numpy.ndarray) : list of rescaled lambdas for computing lasso-path.
+            Default value : None, which means line space between 1 and :attr:`lamin` and :attr:`Nlam` points, with logarithm scale or not depending on :attr:`logscale`.
+
+        Nlam (int) : number of points in the lambda-path if :attr:`lambdas` is still None (default).
+            Default value : 80
+
+        lamin (float) : lambda minimum if :attr:`lambdas` is still None (default).
+            Default value : 1e-3
+
+        logscale (bool): when :attr:`lambdas` is set to None (default), this parameters tells if it should be set with log scale or not.
+            Default value : True
+
+        plot_sigma (bool) : if True then the representation method of the solution will also plot the sigma-path if it is computed (formulation R3 or R4).
+            Default value : True
+
+        label (numpy.ndarray of str) : labels on each coefficient.
+
+    """
+
+    def __init__(self, method="not specified"):
         self.formulation = "not specified"
         self.numerical_method = method
         self.n_active = 0
@@ -504,7 +592,7 @@ class CVparameters:
 
     """
 
-    def __init__(self, method = "not specified"):
+    def __init__(self, method="not specified"):
         self.seed = 0
         self.formulation = "not specified"
         self.numerical_method = method
@@ -587,7 +675,7 @@ class StabSelparameters:
 
     """
 
-    def __init__(self, method = "not specified"):
+    def __init__(self, method="not specified"):
         self.seed = 123
         self.formulation = "not specified"
         self.numerical_method = method
@@ -650,7 +738,7 @@ class LAMfixedparameters:
             Default value : None
     """
 
-    def __init__(self, method = "not specified"):
+    def __init__(self, method="not specified"):
         self.lam = "theoretical"
         self.formulation = "not specified"
         self.numerical_method = method
@@ -665,7 +753,7 @@ class LAMfixedparameters:
             string += "\n     threshold : average of the absolute value of beta"
         else:
             string += "\n     threshold = " + str(round(self.threshold, 3))
-        
+
         if type(self.lam) is str:
             string += "\n     lam : " + self.lam
         else:
@@ -691,7 +779,9 @@ class Solution:
     """
 
     def __init__(self):
+
         self.PATH = "not computed"  # this will be filled with an object of the class 'solution_PATH' when the method solve() will be used.
+        self.ALO = "not computed"  # this will be filled with an object of the class 'solution_ALO' when the method solve() will be used.
         self.CV = "not computed"  # will be an object of the class 'solution_PATH'
         self.StabSel = (
             "not computed"  # will be an object of the class 'solution_StabSel'
@@ -700,14 +790,9 @@ class Solution:
 
     def __repr__(self):
         string = ""
-        if not type(self.LAMfixed) is str:
-            string += self.LAMfixed.__repr__() + "\n"
-        if not type(self.PATH) is str:
-            string += self.PATH.__repr__() + "\n"
-        if not type(self.CV) is str:
-            string += self.CV.__repr__() + "\n"
-        if not type(self.StabSel) is str:
-            string += self.StabSel.__repr__() + "\n"
+        for obj in [self.LAMfixed, self.PATH, self.ALO, self.CV, self.StabSel]:
+            if not type(obj) is str:
+                string += obj.__repr__() + "\n"
 
         return string
 
@@ -759,17 +844,17 @@ class solution_PATH:
 
         out = pathlasso(
             matrices,
-            lambdas = param.lambdas,
-            n_active = param.n_active,
-            typ = name_formulation,
-            meth = numerical_method,
-            return_sigm = True,
-            rho = rho,
-            e = e,
-            rho_classification = rho_classification,
-            w = param.formulation.w,
-            intercept = param.formulation.intercept,
-            true_lam = not param.rescaled_lam
+            lambdas=param.lambdas,
+            n_active=param.n_active,
+            typ=name_formulation,
+            meth=numerical_method,
+            return_sigm=True,
+            rho=rho,
+            e=e,
+            rho_classification=rho_classification,
+            w=param.formulation.w,
+            intercept=param.formulation.intercept,
+            true_lam=not param.rescaled_lam,
         )
         if formulation.concomitant:
             self.BETAS, self.LAMBDAS, self.SIGMAS = out
@@ -792,7 +877,7 @@ class solution_PATH:
         if (
             d > 20
         ):  # this trick is to plot only the biggest value, excluding the intercept
-            avg_betas = np.mean(abs(np.array(self.BETAS)), axis = 0)
+            avg_betas = np.mean(abs(np.array(self.BETAS)), axis=0)
             if self.formulation.intercept:
                 avg_betas[0] = 0  # trick to exclude intercept in the graph
                 string += "\n   There is also an intercept.  "
@@ -811,15 +896,15 @@ class solution_PATH:
         else:
             xGraph = self.LAMBDAS
             xlabel = PATH_beta_path["xlabel"]
-        plt.figure(figsize = (10, 3), dpi = 80)
+        plt.figure(figsize=(10, 3), dpi=80)
         affichage(
             self.BETAS[:, top],
             xGraph,
-            labels = self.label[top],
-            naffichage = 5,
-            title = PATH_beta_path["title"] + self.formulation.name(),
-            xlabel = xlabel,
-            ylabel = PATH_beta_path["ylabel"],
+            labels=self.label[top],
+            naffichage=5,
+            title=PATH_beta_path["title"] + self.formulation.name(),
+            xlabel=xlabel,
+            ylabel=PATH_beta_path["ylabel"],
         )
 
         plt.tight_layout()
@@ -827,7 +912,7 @@ class solution_PATH:
             plt.savefig(self.save + "Beta-path")
         plt.show(block=False)
         if type(self.SIGMAS) != str and self.plot_sigma:
-            plt.figure(figsize = (10, 3), dpi = 80)
+            plt.figure(figsize=(10, 3), dpi=80)
             plt.plot(self.LAMBDAS, self.SIGMAS), plt.ylabel(
                 PATH_sigma_path["ylabel"]
             ), plt.xlabel(PATH_sigma_path["xlabel"])
@@ -900,16 +985,16 @@ class solution_CV:
         (out, self.yGraph, self.standard_error, self.index_min, self.index_1SE,) = CV(
             matrices,
             param.Nsubset,
-            typ = name_formulation,
-            num_meth = numerical_method,
-            lambdas = param.lambdas,
-            seed = param.seed,
-            rho = rho,
-            rho_classification = rho_classification,
-            oneSE = param.oneSE,
-            e = e,
-            w = param.formulation.w,
-            intercept = param.formulation.intercept,
+            typ=name_formulation,
+            num_meth=numerical_method,
+            lambdas=param.lambdas,
+            seed=param.seed,
+            rho=rho,
+            rho_classification=rho_classification,
+            oneSE=param.oneSE,
+            e=e,
+            w=param.formulation.w,
+            intercept=param.formulation.intercept,
         )
 
         self.xGraph = param.lambdas
@@ -926,7 +1011,7 @@ class solution_CV:
             abs(self.beta) > 1e-5
         )  # boolean array, false iff beta_i = 0
         self.refit = min_LS(
-            matrices, self.selected_param, intercept = self.formulation.intercept
+            matrices, self.selected_param, intercept=self.formulation.intercept
         )
         self.time = time() - t0
         self.save1 = False
@@ -943,7 +1028,7 @@ class solution_CV:
             selected[0] = False
             string += "\n    Intercept : " + str(self.refit[0])
 
-        self.graphic(save = self.save1, logscale = self.logscale)
+        self.graphic(save=self.save1, logscale=self.logscale)
 
         nb_select = sum(selected)
         if nb_select > 10:
@@ -951,11 +1036,11 @@ class solution_CV:
             top = np.sort(top)
         else:
             top = np.arange(nb_select)
-        plt.figure(figsize = (10, 3), dpi = 80)
+        plt.figure(figsize=(10, 3), dpi=80)
         plt.bar(range(nb_select), self.refit[selected])
         plt.title(CV_beta["title"])
         plt.xlabel(CV_beta["xlabel"]), plt.ylabel(CV_beta["ylabel"])
-        plt.xticks(top, self.label[selected][top], rotation = 90)
+        plt.xticks(top, self.label[selected][top], rotation=90)
         plt.tight_layout()
         if type(self.save2) == str:
             plt.savefig(self.save2)
@@ -968,7 +1053,7 @@ class solution_CV:
         string += "\n   Running time :  " + str(round(self.time, 3)) + "s"
         return string
 
-    def graphic(self, se_max = None, save = None, logscale = True, errorevery = 5):
+    def graphic(self, se_max=None, save=None, logscale=True, errorevery=5):
         """Method to plot the graphic showing mean squared error over along lambda path once cross validation is computed.
 
         Args:
@@ -983,7 +1068,7 @@ class solution_CV:
                 Default value : None
 
         """
-        plt.figure(figsize = (10, 3), dpi = 80)
+        plt.figure(figsize=(10, 3), dpi=80)
 
         i_min, i_1SE = self.index_min, self.index_1SE
 
@@ -1001,31 +1086,31 @@ class solution_CV:
                 np.log10(self.xGraph[jmin : jmax + 1]),
                 self.yGraph[jmin : jmax + 1],
                 self.standard_error[jmin : jmax + 1],
-                label = "mean over the k groups of data",
-                errorevery = errorevery,
+                label="mean over the k groups of data",
+                errorevery=errorevery,
             )
             plt.xlabel(r"$ \log_{10} \lambda / \lambda_{max}$")
             plt.axvline(
-                x = np.log10(self.xGraph[i_min]),
-                color = "k",
-                label = r"$\lambda$ (min MSE)",
+                x=np.log10(self.xGraph[i_min]),
+                color="k",
+                label=r"$\lambda$ (min MSE)",
             )
             plt.axvline(
-                x = np.log10(self.xGraph[i_1SE]),
-                color = "r",
-                label = r"$\lambda$ (1SE) ",
+                x=np.log10(self.xGraph[i_1SE]),
+                color="r",
+                label=r"$\lambda$ (1SE) ",
             )
         else:
             plt.errorbar(
                 self.xGraph[jmin : jmax + 1],
                 self.yGraph[jmin : jmax + 1],
                 self.standard_error[jmin : jmax + 1],
-                label = "mean over the k groups of data",
-                errorevery = errorevery,
+                label="mean over the k groups of data",
+                errorevery=errorevery,
             )
             plt.xlabel(r"$\lambda / \lambda_{max}$")
-            plt.axvline(x = self.xGraph[i_min], color = "k", label = r"$\lambda$ (min MSE)")
-            plt.axvline(x = self.xGraph[i_1SE], color = "r", label = r"$\lambda$ (1SE) ")
+            plt.axvline(x=self.xGraph[i_min], color="k", label=r"$\lambda$ (min MSE)")
+            plt.axvline(x=self.xGraph[i_1SE], color="r", label=r"$\lambda$ (1SE) ")
         plt.title(CV_graph["title"])
         if self.formulation.classification:
             plt.ylabel(CV_graph["ylabel_classification"])
@@ -1036,6 +1121,149 @@ class solution_CV:
         if save is not None and type(save) == str:
             plt.savefig(save)
         plt.show(block=False)
+
+
+# Here, the main function used is pathlasso ; from the file compact_func
+class solution_ALO:
+    """Class that contains  characteristics of the lasso-path computed,
+    which also contains representation method that plot the graphic of this lasso-path.
+
+    Attributes:
+        BETAS (numpy.ndarray) : array of size Npath x d with the solution beta for each lambda on each row.
+        SIGMAS (numpy.ndarray) : array of size Npath with the solution sigma for each lambda when the formulation of the problem is R2 or R4.
+        LAMBDAS (numpy.ndarray) : array of size Npath with the lambdas (real lambdas, not divided by lambda_max) for which the solution is computed.
+        logscale (bool): whether or not the path should be plotted with a logscale.
+        method (str) : name of the numerical method that has been used. It can be 'Path-Alg', 'P-PDS' , 'PF-PDS' or 'DR'.
+        save1,save2 (bool or string) : if a string is given, the corresponding graph will be saved with the given name of the file.
+            save1 is for the path plot ; save2 for ALO plot ; and save3 for refit beta-solution.
+        formulation (Formulation) : object containing the info about the formulation of the minimization problem we solve.
+        time (float) : running time of this action.
+
+    """
+
+    def __init__(self, matrices, param, formulation, numerical_method, label):
+        t0 = time()
+
+        # Formulation choosing
+        if param.formulation == "not specified":
+            param.formulation = formulation
+        if param.numerical_method == "not specified":
+            param.numerical_method = numerical_method
+        name_formulation = param.formulation.name()
+        rho = param.formulation.rho_scaled
+        rho_classification = param.formulation.rho_classification
+        e = param.formulation.e
+        # Algorithmic method choosing
+        numerical_method = choose_numerical_method(
+            param.numerical_method, "PATH", param.formulation
+        )
+        param.numerical_method = numerical_method
+        # Compute the solution and is the formulation is concomitant, it also compute sigma
+        if param.lambdas is None:
+            if param.logscale:
+                param.lambdas = np.array(
+                    [param.lamin ** (i / (param.Nlam - 1)) for i in range(param.Nlam)]
+                )
+            else:
+                param.lambdas = np.linspace(1.0, param.lamin, param.Nlam)
+
+        self.logscale = param.logscale
+        out = pathlasso(
+            matrices,
+            lambdas=param.lambdas,
+            n_active=param.n_active,
+            typ=name_formulation,
+            meth=numerical_method,
+            return_sigm=True,
+            rho=rho,
+            e=e,
+            rho_classification=rho_classification,
+            w=param.formulation.w,
+            intercept=param.formulation.intercept,
+            true_lam=not param.rescaled_lam,
+        )
+        if formulation.concomitant:
+            self.BETAS, self.LAMBDAS, self.SIGMAS = out
+        else:
+            self.BETAS, self.LAMBDAS = out
+            self.SIGMAS = "not computed"
+
+        self.formulation = formulation
+        self.plot_sigma = param.plot_sigma
+        self.method = numerical_method
+        self.save1 = False
+        self.save2 = False
+        self.save3 = False
+        self.label = label
+
+        # ALO part, for
+        X, C, y = matrices
+
+        if formulation.concomitant:
+            raise ValueError("ALO is not implemented for R3 and R4.")
+
+        self.alo, self.df = alo_classo_risk(
+            X,
+            C,
+            y,
+            self.BETAS,
+            huber=formulation.huber,
+            intercept=self.formulation.intercept,
+            classification=formulation.classification,
+        )
+        self.imin = np.argmin(self.alo)
+        self.beta = self.BETAS[self.imin]
+        self.selected_param = (
+            abs(self.beta) > 1e-5
+        )  # boolean array, false iff beta_i = 0
+        self.refit = min_LS(
+            matrices, self.selected_param, intercept=self.formulation.intercept
+        )
+
+        self.time = time() - t0
+
+    def __repr__(self):
+
+        string = "\n ALO COMPUTATION : "
+        if self.formulation.intercept:
+            string += "\n   There is also an intercept.  "
+        selected = self.selected_param[:]
+        # this trick is done to plot only selected parameters, excluding intercept
+        plot_path(
+            self.BETAS,
+            self.LAMBDAS,
+            self.label,
+            self.formulation.intercept,
+            self.SIGMAS,
+            self.formulation.name(),
+            logscale=self.logscale,
+            plot_sigma=self.plot_sigma,
+            save=self.save1,
+        )
+        plot_alo(self.LAMBDAS, self.alo, logscale=self.logscale, save=self.save2)
+
+        nb_select = sum(selected)
+        if nb_select > 10:
+            top = np.argpartition(abs(self.refit[selected]), -10)[-10:]
+            top = np.sort(top)
+        else:
+            top = np.arange(nb_select)
+        plt.figure(figsize=(10, 3), dpi=80)
+        plt.bar(range(nb_select), self.refit[selected])
+        plt.title(ALO_beta["title"])
+        plt.xlabel(ALO_beta["xlabel"]), plt.ylabel(ALO_beta["ylabel"])
+        plt.xticks(top, self.label[selected][top], rotation=90)
+        plt.tight_layout()
+        if type(self.save3) == str:
+            plt.savefig(self.save3 + "ALO-beta")
+        plt.show(block=False)
+
+        string += "\n   Selected variables :  "
+        for i in np.where(self.selected_param)[0]:
+            string += self.label[i] + "    "
+
+        string += "\n   Running time :  " + str(round(self.time, 3)) + "s"
+        return string
 
 
 # Here, the main function used is stability ; from the file stability selection
@@ -1084,8 +1312,8 @@ class solution_StabSel:
             param.numerical_method,
             "StabSel",
             param.formulation,
-            StabSelmethod = param.method,
-            lam = lam,
+            StabSelmethod=param.method,
+            lam=lam,
         )
         param.numerical_method = numerical_method
 
@@ -1100,22 +1328,22 @@ class solution_StabSel:
         # Compute the distribution
         output = stability(
             matrices,
-            StabSelmethod = param.method,
-            numerical_method = numerical_method,
-            lamin = param.lamin,
-            lam = lam,
-            Nlam = param.Nlam,
-            q = param.q,
-            B = param.B,
-            percent_nS = param.percent_nS,
-            formulation = name_formulation,
-            seed = param.seed,
-            rho = rho,
-            rho_classification = rho_classification,
-            true_lam = not param.rescaled_lam,
-            e = e,
-            w = param.formulation.w,
-            intercept = param.formulation.intercept,
+            StabSelmethod=param.method,
+            numerical_method=numerical_method,
+            lamin=param.lamin,
+            lam=lam,
+            Nlam=param.Nlam,
+            q=param.q,
+            B=param.B,
+            percent_nS=param.percent_nS,
+            formulation=name_formulation,
+            seed=param.seed,
+            rho=rho,
+            rho_classification=rho_classification,
+            true_lam=not param.rescaled_lam,
+            e=e,
+            w=param.formulation.w,
+            intercept=param.formulation.intercept,
         )
 
         if param.method == "first":
@@ -1136,7 +1364,7 @@ class solution_StabSel:
         self.refit = min_LS(
             matrices,
             self.selected_param,
-            intercept = param.formulation.intercept,
+            intercept=param.formulation.intercept,
         )
         self.save1 = False
         self.save2 = False
@@ -1160,7 +1388,7 @@ class solution_StabSel:
 
         self.to_label = self.distribution > self.threshold_label
         D = self.distribution[top]
-        Dpath = self.distribution_path,
+        Dpath = (self.distribution_path,)
         selected = self.selected_param[top]
 
         unselected = [not i for i in selected]
@@ -1169,29 +1397,29 @@ class solution_StabSel:
             D[selected],
             D[unselected],
         )
-        plt.figure(figsize = (10, 3), dpi = 80)
+        plt.figure(figsize=(10, 3), dpi=80)
         plt.bar(
             range(len(Dselected)),
             Dselected,
-            color = "r",
-            label = "selected coefficients",
+            color="r",
+            label="selected coefficients",
         )
         plt.bar(
             range(len(Dunselected)),
             Dunselected,
-            color = "b",
-            label = "unselected coefficients",
+            color="b",
+            label="unselected coefficients",
         )
         plt.axhline(
-            y = self.threshold,
-            color = "g",
-            label = "Threshold : thresh = " + str(self.threshold),
+            y=self.threshold,
+            color="g",
+            label="Threshold : thresh = " + str(self.threshold),
         )
 
         plt.xticks(
-            ticks = np.where(self.to_label[top])[0],
-            labels = self.label[top][self.to_label[top]],
-            rotation = 30,
+            ticks=np.where(self.to_label[top])[0],
+            labels=self.label[top][self.to_label[top]],
+            rotation=30,
         )
         plt.xlabel(StabSel_graph["xlabel"]), plt.ylabel(
             StabSel_graph["ylabel"]
@@ -1233,7 +1461,7 @@ class solution_StabSel:
             plt.show(block=False)
         """
 
-        plt.figure(figsize = (10, 3), dpi = 80)
+        plt.figure(figsize=(10, 3), dpi=80)
         plt.bar(range(len(self.refit[top])), self.refit[top])
         plt.xlabel(StabSel_beta["xlabel"]), plt.ylabel(
             StabSel_beta["ylabel"]
@@ -1241,7 +1469,7 @@ class solution_StabSel:
         plt.xticks(
             np.where(selected)[0],
             self.label[top][selected],
-            rotation = 30,
+            rotation=30,
         )
         plt.tight_layout()
         if type(self.save2) == str:
@@ -1295,7 +1523,7 @@ class solution_LAMfixed:
 
         # Algorithmic method choosing
         numerical_method = choose_numerical_method(
-            param.numerical_method, "LAM", param.formulation, lam = self.lam
+            param.numerical_method, "LAM", param.formulation, lam=self.lam
         )
         param.numerical_method = numerical_method
         self.rescaled_lam = param.rescaled_lam
@@ -1304,27 +1532,27 @@ class solution_LAMfixed:
         out = Classo(
             matrices,
             self.lam,
-            typ = name_formulation,
-            meth = numerical_method,
-            rho = rho,
-            get_lambdamax = True,
-            true_lam = not self.rescaled_lam,
-            e = e,
-            rho_classification = rho_classification,
-            w = param.formulation.w,
-            intercept = param.formulation.intercept,
+            typ=name_formulation,
+            meth=numerical_method,
+            rho=rho,
+            get_lambdamax=True,
+            true_lam=not self.rescaled_lam,
+            e=e,
+            rho_classification=rho_classification,
+            w=param.formulation.w,
+            intercept=param.formulation.intercept,
         )
 
         if param.formulation.concomitant:
             self.lambdamax, self.beta, self.sigma = out
         else:
             self.lambdamax, self.beta = out
-        
+
         if param.rescaled_lam:
             self.lamb = self.lambdamax * self.lam
         else:
             self.lamb = self.lam
-            
+
         if param.threshold is None:
             param.threshold = np.mean(abs(self.beta))
 
@@ -1332,7 +1560,7 @@ class solution_LAMfixed:
         self.refit = min_LS(
             matrices,
             self.selected_param,
-            intercept = param.formulation.intercept,
+            intercept=param.formulation.intercept,
         )
         self.label = label
         self.time = time() - t0
@@ -1348,21 +1576,20 @@ class solution_LAMfixed:
         else:
             top = np.arange(d)
 
-        plt.figure(figsize = (10, 3), dpi = 80)
+        plt.figure(figsize=(10, 3), dpi=80)
         plt.bar(range(len(top)), self.beta[top]), plt.title(
             LAM_beta["title"] + str(round(self.lam, 3))
         ), plt.xlabel(LAM_beta["xlabel"]), plt.ylabel(LAM_beta["ylabel"])
         plt.xticks(
             np.where(self.selected_param[top])[0],
             self.label[top][self.selected_param[top]],
-            rotation = 30,
+            rotation=30,
         )
-        
+
         plt.tight_layout()
         if type(self.save) == str:
             plt.savefig(self.save)
-        
-        
+
         plt.show(block=False)
 
         if self.formulation.concomitant:
@@ -1376,7 +1603,7 @@ class solution_LAMfixed:
         return string
 
 
-def choose_numerical_method(method, model, formulation, StabSelmethod = None, lam = None):
+def choose_numerical_method(method, model, formulation, StabSelmethod=None, lam=None):
     """Annex function in order to choose the right numerical method, if the given one is invalid.
     In general, it will choose one of the possible optimization scheme for a given formulation.
     When several computation modes are possible, the rules are as follow :
@@ -1439,16 +1666,97 @@ def choose_numerical_method(method, model, formulation, StabSelmethod = None, la
     return method
 
 
+def plot_path(
+    BETAS,
+    LAMBDAS,
+    label,
+    intercept,
+    SIGMAS,
+    name,
+    logscale=False,
+    plot_sigma=False,
+    save=False,
+):
+    d = len(BETAS[0])
+    if d > 20:
+        # this trick is to plot only the biggest value, excluding the intercept
+        avg_betas = np.mean(abs(np.array(BETAS)), axis=0)
+        if intercept:
+            avg_betas[0] = 0  # trick to exclude intercept in the graph
+        top = np.argpartition(avg_betas, -20)[-20:]
+
+    else:
+        if intercept:
+            top = np.arange(1, d)
+        else:
+            top = np.arange(d)
+
+    xGraph = LAMBDAS
+    xlabel = PATH_beta_path["xlabel"]
+
+    plt.figure(figsize=(10, 3), dpi=80)
+    affichage(
+        BETAS[:, top],
+        xGraph,
+        labels=label[top],
+        naffichage=5,
+        title=PATH_beta_path["title"] + name,
+        xlabel=xlabel,
+        ylabel=PATH_beta_path["ylabel"],
+        logscale=logscale,
+    )
+
+    plt.tight_layout()
+    if type(save) == str:
+        plt.savefig(save + "Beta-path")
+    
+    plt.show(block=False)
+    
+    if type(SIGMAS) != str and plot_sigma:
+        plt.figure(figsize=(10, 3), dpi=80)
+        plt.plot(LAMBDAS, SIGMAS), plt.ylabel(PATH_sigma_path["ylabel"]), plt.xlabel(
+            PATH_sigma_path["xlabel"]
+        )
+        plt.title(PATH_sigma_path["title"] + name)
+        plt.tight_layout()
+        if type(save) == str:
+            plt.savefig(save + "Sigma-path")
+        plt.show(block=False)
+
+
+def plot_alo(lambdas, alo, logscale=False, save=False):
+    imin = np.argmin(alo)
+    alomin = alo[imin]
+    ymin = 0.5 * alomin
+    ymax = 3 * alomin
+    xmin = lambdas[np.max(np.argwhere(alo < ymax))]
+    xmax = lambdas[np.min(np.argwhere(alo < ymax))]
+
+    plt.figure(figsize=(10, 3), dpi=80)
+    plt.plot(lambdas, alo)
+    plt.axvline(x=lambdas[imin], color="r", label=r"$\lambda$ chosen ")
+    if logscale:
+        plt.xscale("log")
+    plt.ylim(ymin, ymax)
+    plt.xlim(xmin, xmax)
+    plt.xlabel(ALO_graph["xlabel"])
+    plt.ylabel(ALO_graph["ylabel"])
+    plt.title(ALO_graph["title"])
+    if type(save) == str:
+        plt.savefig(save + "ALO-path")
+    plt.show(block=False)
+
+
 CV_beta = {
     "title": r"Refitted coefficients after CV model selection",
     "xlabel": r"Coefficient index $i$",
     "ylabel": r"Coefficients $\beta_i$ ",
 }
 CV_graph = {
-    "title": r" ",
+    "title": r"k-fold cross-validation profile",
     "xlabel": r"$\lambda / \lambda_{max}$",
     "ylabel": r"Mean-Squared Error (MSE) ",
-    "ylabel_classification": r"Miss classification rate "
+    "ylabel_classification": r"Miss classification rate ",
 }
 LAM_beta = {
     "title": r"Coefficients at $\lambda$ = ",
@@ -1477,6 +1785,18 @@ StabSel_path = {
 }
 StabSel_beta = {
     "title": r"Refitted coefficients after stability selection",
+    "xlabel": r"Coefficient index $i$",
+    "ylabel": r"Coefficients $\beta_i$ ",
+}
+
+ALO_graph = {
+    "title": r"ALO profile",
+    "xlabel": r"$\lambda$",
+    "ylabel": r"Approximation of Leave 1-out error (ALO) ",
+}
+
+ALO_beta = {
+    "title": r"Refitted coefficients after ALO model selection",
     "xlabel": r"Coefficient index $i$",
     "ylabel": r"Coefficients $\beta_i$ ",
 }

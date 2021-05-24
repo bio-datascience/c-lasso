@@ -18,10 +18,14 @@ A similar analysis is also done in `Tree-Aggregated Predictive Modeling of Micro
  `on another dataset <https://royalsocietypublishing.org/doi/full/10.1098/rspb.2014.1988>`_
 """
 
+import sys, os
+from os.path import join, dirname, abspath
+
+classo_dir = dirname(dirname(abspath("__file__")))
+sys.path.append(classo_dir)
 from classo import classo_problem
 import numpy as np
 import pandas as pd
-
 
 
 # %%
@@ -29,15 +33,15 @@ import pandas as pd
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-t = pd.read_csv('pH_data/qiime2/news/table.csv', index_col=0)
-metadata = pd.read_table('pH_data/qiime2/originals/88soils_modified_metadata.txt', index_col=0)
+t = pd.read_csv("pH_data/qiime2/news/table.csv", index_col=0)
+metadata = pd.read_table(
+    "pH_data/qiime2/originals/88soils_modified_metadata.txt", index_col=0
+)
 y_uncent = metadata["ph"].values
 
 
 X = t.values
 label = t.columns
-
-
 
 
 # second option to load the data
@@ -55,9 +59,9 @@ print(y.shape)
 # Set up c-lassso problem
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-problem = classo_problem(X, y, label = label) 
+problem = classo_problem(X, y, label=label)
 
-problem.model_selection.StabSelparameters.method      = 'lam'
+problem.model_selection.StabSelparameters.method = "lam"
 problem.model_selection.PATH = True
 problem.model_selection.LAMfixed = True
 problem.model_selection.PATHparameters.n_active = X.shape[1] + 1
@@ -89,16 +93,14 @@ print(problem, problem.solution)
 # %%
 # Solve for R4
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-# Remark : we reset the numerical method here, 
+# Remark : we reset the numerical method here,
 # because it has been automatically set to '¨Path-Alg'
 # for previous computations, but for R4, "DR" is much better
 # as explained in the documentation, R4 "Path-Alg" is a method for fixed lambda
-# but is (paradoxically) bad to compute the lambda-path 
+# but is (paradoxically) bad to compute the lambda-path
 # because of the absence of possible warm-start in this method
 
 problem.model_selection.PATHparameters.numerical_method = "DR"
 problem.formulation.huber = True
 problem.solve()
 print(problem, problem.solution)
-
-
